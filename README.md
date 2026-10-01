@@ -1,91 +1,93 @@
-![Metabase](metabase.png)
-
 # Deploying Metabase to Scalingo
 
-## Deploying Using Scalingo's One-click Button
-
-Click on the button below to deploy Metabase to Scalingo within minutes.
-
-[![Deploy](https://cdn.scalingo.com/deploy/button.svg)](https://my.scalingo.com/deploy?source=https://github.com/Scalingo/metabase-scalingo#master)
-
-## Deploying Using Scalingo's Command Line Tool
-
-1. Create an application on Scalingo:
+1. Configure `git`:
 
 ```bash
-$ scalingo create my-metabase
+$ scalingo --app dialog-metabase git-setup
 ```
 
-2. Add a PostgreSQL for the internal usage of Metabase:
-
+2. Deploy the application:
 ```bash
-$ scalingo --app my-metabase addons-add postgresql postgresql-starter-512
+$ git push scalingo main
 ```
-
-3. Configure your application to use the appropriate buildpack for deployments:
-
-```bash
-$ scalingo --app my-metabase env-set 'BUILDPACK_URL=https://github.com/Scalingo/multi-buildpack'
-```
-
-4. Clone this repository:
-
-```bash
-$ git clone https://github.com/Scalingo/metabase-scalingo
-```
-
-5. Configure `git`:
-
-```bash
-$ cd metabase-scalingo
-$ scalingo --app my-metabase git-setup
-```
-
-6. Deploy the application:
-
-```bash
-$ git push scalingo master
-```
-
-# Configuring the Application Deployment Environment
-
-The following environment variables are available for you to adjust, depending
-on your needs:
-
-| Name                 | Description                                                                              | Default value                                   |
-| -------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `BUILDPACK_URL`      | URL of the buildpack to use.                                                             | https://github.com/Scalingo/multi-buildpack.git |
-| `DATABASE_URL`       | URL of your database addon. **Only available if you have a database addon provisioned**. | Provided by Scalingo                            |
-| `MAX_METASPACE_SIZE` | Maximum amount of memory allocated to Java Metaspace[^1].                                | `512m` (512MB)                                  |
-
-Metabase also [supports many environment variables](https://www.metabase.com/docs/latest/operations-guide/environment-variables.html).
-
-[^1]: See https://wiki.openjdk.org/display/HotSpot/Metaspace for further details about Java Metaspace.
-
 # Updating Metabase on Scalingo
 
 To upgrade to the latest version of Metabase, you only need to redeploy it,
 this will retrieve the latest version avaible on [the Metabase buildpack](https://github.com/metabase/metabase-buildpack).
 
-## Updating After Deploying Using Scalingo's One-click Button
-
-If you deployed your Metabase instance via our One-click button, you can update
-it with the following command:
-
-```bash
-$ scalingo --app my-metabase deploy https://github.com/Scalingo/metabase-scalingo/archive/refs/heads/master.tar.gz
-```
-
-If you are facing the `create archive deployment: * git_ref → can't be blank` error, you may need to specify the version explicitly:
-
-```bash
-$ scalingo --app my-metabase deploy https://github.com/Scalingo/metabase-scalingo/archive/refs/heads/master.tar.gz v1.0.0
-```
-
 ## Updating After Deploying Using Scalingo's Command Line Tool
 
 ```bash
 $ cd metabase-scalingo
-$ git pull origin master
+$ git pull origin main
+$ git push scalingo main
+```
+
+---
+
+## Protection par oauth2-proxy (ProConnect)
+
+Cette instance est placée derrière [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/)
+via le [buildpack betagouv](https://github.com/betagouv/oauth2-proxy-buildpack), conformément aux
+[recommandations sécurité beta.gouv.fr](https://doc.incubateur.net/communaute/gerer-son-produit/aide-a-la-mise-en-application-des-standards/securite/securite-proxy-dauthentification).
+Les utilisateurs non authentifiés via ProConnect n'atteignent jamais Metabase.
+
+### Fonctionnement
+
+- Le buildpack `oauth2-proxy-buildpack` est ajouté dans `.buildpacks`.
+- Le `Procfile` lance `oauth2-proxy` en frontal : il écoute sur `$PORT` (port public Scalingo)
+  et relaie les requêtes authentifiées vers Metabase, à qui le script attribue `PORT=8080`.
+- Metabase écoute donc en interne sur `http://127.0.0.1:8080` (via `MB_JETTY_PORT`).
+
+### Créer l'application OAuth ProConnect
+
+Créez une application OAuth via l'[espace partenaires ProConnect](https://partenaires.proconnect.gouv.fr/)
+avec l'URL de callback :
+
+```
+https://dialog-metabase.osc-fr1.scalingo.io/oauth2/callback
+```
+
+Vous obtenez un `client_id` et un `client_secret`.
+
+### Variables d'environnement à définir sur Scalingo
+
+À configurer via `scalingo --app dialog-metabase env-set ...` (ne pas committer les secrets) :
+
+```bash
+# --- ProConnect ---
+OAUTH2_PROXY_PROVIDER=oidc
+OAUTH2_PROXY_OIDC_ISSUER_URL=https://auth.agentconnect.gouv.fr/api/v2   # endpoint de prod
+OAUTH2_PROXY_SCOPE="openid given_name usual_name email profile"
+OAUTH2_PROXY_PROMPT=login
+
+# --- Identifiants de l'app OAuth ProConnect ---
+OAUTH2_PROXY_CLIENT_ID=<client_id>
+OAUTH2_PROXY_CLIENT_SECRET=<client_secret>
+OAUTH2_PROXY_COOKIE_SECRET=<secret_32_caracteres>   # ex: openssl rand -base64 32 | head -c 32
+
+# --- Réseau / cookies ---
+OAUTH2_PROXY_UPSTREAMS=http://127.0.0.1:8080        # Metabase en interne
+OAUTH2_PROXY_REDIRECT_URL=https://dialog-metabase.osc-fr1.scalingo.io/oauth2/callback
+OAUTH2_PROXY_COOKIE_DOMAINS=dialog-metabase.osc-fr1.scalingo.io
+OAUTH2_PROXY_COOKIE_SECURE=true
+OAUTH2_PROXY_REVERSE_PROXY=true                     # requêtes reçues derrière le routeur Scalingo
+OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true              # redirige directement vers ProConnect
+
+# --- Restriction d'accès par domaines email ---
+OAUTH2_PROXY_EMAIL_DOMAINS="beta.gouv.fr,developpement-durable.gouv.fr"
+```
+
+### Exclure des routes de l'authentification (embeds Metabase, optionnel)
+
+Si vous utilisez les dashboards embarqués Metabase, excluez les routes publiques :
+
+```bash
+OAUTH2_PROXY_SKIP_AUTH_ROUTES="^/app/embed\.js$,^/app/.*,^/embed/.*,^/api/embed/.*,^/api/geojson/*"
+```
+
+### Déploiement
+
+```bash
 $ git push scalingo master
 ```
