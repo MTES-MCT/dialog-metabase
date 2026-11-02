@@ -12,16 +12,55 @@ $ git push scalingo main
 ```
 # Updating Metabase on Scalingo
 
-To upgrade to the latest version of Metabase, you only need to redeploy it,
-this will retrieve the latest version avaible on [the Metabase buildpack](https://github.com/metabase/metabase-buildpack).
+La version de Metabase n'est **pas figée dans ce dépôt** : elle est déterminée au
+moment du build par le [buildpack Metabase Scalingo](https://github.com/Scalingo/metabase-buildpack)
+via la variable d'environnement `METABASE_VERSION`.
 
-## Updating After Deploying Using Scalingo's Command Line Tool
+- Si `METABASE_VERSION` est absente ou vaut `*`/`latest`, le buildpack récupère la
+  **dernière version publiée** de Metabase.
+- Sinon, il télécharge exactement la version demandée depuis
+  `https://downloads.metabase.com/<METABASE_VERSION>/metabase.jar`.
+
+Une simple redéploiement reconstruit l'application et télécharge le jar correspondant.
+
+## Épingler une version précise (recommandé)
+
+Épingler la version garantit des déploiements reproductibles et permet d'appliquer
+un correctif de sécurité de façon contrôlée. Le format attendu est le tag Metabase,
+par exemple `v0.64.3.4`.
 
 ```bash
-$ cd metabase-scalingo
-$ git pull origin main
-$ git push scalingo main
+# Définir la version cible
+$ scalingo --app dialog-metabase env-set METABASE_VERSION=v0.64.3.4
 ```
+
+## Procédure d'upgrade
+
+1. (Optionnel) Épingler la version corrigée :
+
+   ```bash
+   $ scalingo --app dialog-metabase env-set METABASE_VERSION=v0.64.3.4
+   ```
+
+2. Redéployer pour reconstruire avec le nouveau jar :
+
+   ```bash
+   $ cd dialog-metabase
+   $ git pull origin main
+   $ git push scalingo main
+   ```
+
+   Si aucun changement n'est à committer (upgrade piloté uniquement par la variable
+   d'environnement), forcez un redéploiement avec un commit vide :
+
+   ```bash
+   $ git commit --allow-empty -m "chore: bump Metabase to v0.64.3.4 (security fix)"
+   $ git push scalingo main
+   ```
+
+3. Vérifier la version effective après démarrage via *Admin → Troubleshooting*
+   ou l'endpoint `/api/session/properties` (champ `version`), puis tester les
+   dashboards embarqués (https://dialog.beta.gouv.fr/stats) et les appels API.
 
 ---
 
